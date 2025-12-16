@@ -8,4 +8,5 @@ add_executable(BSLImportTest
 )
 set_property(TARGET BSLImportTest PROPERTY C_STANDARD 23)
 include_directories(include include)
+target_link_libraries(BSLImportTest brotlienc brotlidec brotlicommon)
 file(COPY ${CMAKE_CURRENT_LIST_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

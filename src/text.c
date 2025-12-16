@@ -92,11 +92,13 @@ decoded_text_data_t decode_text( unsigned char * data )
 					};
 					return decoded_data;
 				}
-				unsigned char * letter = unicode_to_utf8( current->c );
+				unsigned char * orig_letter = unicode_to_utf8( current->c );
+				unsigned char * letter = orig_letter;
 				while ( *letter ) {
 					result[ result_index++ ] = *letter;
 					letter++;
 				}
+				free( orig_letter );
 				current = trie_list;
 			}
 
@@ -119,9 +121,17 @@ decoded_text_data_t decode_text( unsigned char * data )
 	}
 }
 
+void destroy_text_system()
+{
+	if ( trie_list ) {
+		free( trie_list );
+	}
+}
+
 static void generate_text_trie()
 {
-	data_t trie_data = load_data( "assets/trie.bin" );
+	data_t orig_trie_data = load_data( "assets/trie.bin" );
+	data_t trie_data = orig_trie_data;
 	size_t count = trie_data.size / 10;
 	trie_list = malloc( count * sizeof( text_trie_t ) );
 	size_t index = 0;
@@ -135,6 +145,7 @@ static void generate_text_trie()
 		trie_data.size -= 10;
 		index++;
 	}
+	free( orig_trie_data.data );
 };
 
 static void write_data_test( data_t data )

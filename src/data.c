@@ -6,7 +6,7 @@
 data_t load_data( const char *filename )
 {
 	data_t had = { 0, 0 };
-	FILE *file = fopen( filename, "r" );
+	FILE * file = fopen( filename, "r" );
 	if ( ! file ) {
 		perror( "Failed to open file" );
 		return had;
