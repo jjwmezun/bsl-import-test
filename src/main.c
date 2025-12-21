@@ -265,8 +265,85 @@ int main()
 		glBufferData( GL_ELEMENT_ARRAY_BUFFER, sizeof( indices ), indices, GL_STATIC_DRAW );
 	}
 
+	GLuint check_bg_shader_program;
+	GLuint check_bg_vao;
+	GLuint check_bg_texture;
+	{
+		const char * vertex_shader_source =
+			"#version 330 core\n"
+			"layout (location = 0) in vec4 i_position;\n"
+			"layout (location = 1) in vec2 i_texcoord;\n"
+			"out vec2 v_texcoord;\n"
+			"void main()\n"
+			"{\n"
+			"   gl_Position = i_position;\n"
+			"   v_texcoord = i_texcoord;\n"
+			"}\n";
+		const char * fragment_shader_source =
+			"#version 330 core\n"
+			"out vec4 f_color;\n"
+			"in vec2 v_texcoord;\n"
+			"uniform sampler2D u_texture;\n"
+			"void main()\n"
+			"{\n"
+			"	float v = texture( u_texture, v_texcoord ).r;\n"
+			"   f_color = vec4( v, v, v, 0.25 );\n"
+			"}\n";
+		shader_t shaders[] =
+		{
+			{ vertex_shader_source, SHADER_TYPE_VERTEX },
+			{ fragment_shader_source, SHADER_TYPE_FRAGMENT }
+		};
+		check_bg_shader_program = compile_shader( shaders, 2 );
+		glUseProgram( check_bg_shader_program );
+
+		float vertices[] = {
+			-1.0f, -1.0f, 1.0f, 1.0f, 0.0f, 40.0f,
+			1.0f, -1.0f, 1.0f, 1.0f, 64.0f, 40.0f,
+			1.0f, 1.0f, 1.0f, 1.0f, 64.0f, 0.0f,
+			-1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f
+		};
+		unsigned int indices[] = {
+			0, 1, 2,
+			2, 3, 0
+		};
+		glGenVertexArrays( 1, &check_bg_vao );
+		glBindVertexArray( check_bg_vao );
+		GLuint vbo, ebo;
+		glGenBuffers( 1, &vbo );
+		glGenBuffers( 1, &ebo );
+		glBindBuffer( GL_ARRAY_BUFFER, vbo );
+		glBufferData( GL_ARRAY_BUFFER, sizeof( vertices ), vertices, GL_STATIC_DRAW );
+		glVertexAttribPointer( 0, 4, GL_FLOAT, GL_FALSE, sizeof( float ) * 6, 0 );
+		glEnableVertexAttribArray( 0 );
+		glVertexAttribPointer( 1, 2, GL_FLOAT, GL_FALSE, sizeof( float ) * 6, ( void * )( sizeof( float ) * 4 ) );
+		glEnableVertexAttribArray( 1 );
+		glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
+		glBufferData( GL_ELEMENT_ARRAY_BUFFER, sizeof( indices ), indices, GL_STATIC_DRAW );
+
+		uint8_t pattern[ 8 * 8 ] =
+		{
+			192, 192, 192, 192, 64, 64, 64, 64,
+			192, 192, 192, 192, 64, 64, 64, 64,
+			192, 192, 192, 192, 64, 64, 64, 64,
+			192, 192, 192, 192, 64, 64, 64, 64,
+			64, 64, 64, 64, 192, 192, 192, 192,
+			64, 64, 64, 64, 192, 192, 192, 192,
+			64, 64, 64, 64, 192, 192, 192, 192,
+			64, 64, 64, 64, 192, 192, 192, 192
+		};
+		glGenTextures( 1, &check_bg_texture );
+		glActiveTexture( GL_TEXTURE1 );
+		glBindTexture( GL_TEXTURE_2D, check_bg_texture );
+		glTexImage2D( GL_TEXTURE_2D, 0, GL_RED, 8, 8, 0, GL_RED, GL_UNSIGNED_BYTE, pattern );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+		glUniform1i( glGetUniformLocation( check_bg_shader_program, "u_texture" ), 1 );
+	}
+
 	GLuint gfx_shader_program;
 	GLuint gfx_vao;
+	GLuint gfx_texture;
 	{
 		const char * vertex_shader_source =
 			"#version 330 core\n"
@@ -324,8 +401,8 @@ int main()
 		glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
 		glBufferData( GL_ELEMENT_ARRAY_BUFFER, sizeof( indices ), indices, GL_STATIC_DRAW );
 
-		GLuint gfx_texture;
 		glGenTextures( 1, &gfx_texture );
+		glActiveTexture( GL_TEXTURE0 );
 		glBindTexture( GL_TEXTURE_2D, gfx_texture );
 		glTexImage2D( GL_TEXTURE_2D, 0, GL_RED, 512, 512, 0, GL_RED, GL_UNSIGNED_BYTE, pixels );
 		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
@@ -370,8 +447,15 @@ int main()
 		glBindVertexArray( bg_vao );
 		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0 );
 
+		// Draw checkered background.
+		glUseProgram( check_bg_shader_program );
+		glActiveTexture( GL_TEXTURE1 );
+		glBindVertexArray( check_bg_vao );
+		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0 );
+
 		// Draw graphics.
 		glUseProgram( gfx_shader_program );
+		glActiveTexture( GL_TEXTURE0 );
 		glBindVertexArray( gfx_vao );
 		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0 );
 
