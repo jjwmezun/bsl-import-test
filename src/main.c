@@ -582,6 +582,11 @@ int main()
 		SDL_GL_SwapWindow( window );
 	}
 
+	// Clean up.
+	free( palette.palettes );
+	SDL_GL_DeleteContext( context );
+	SDL_DestroyWindow( window );
+	SDL_Quit();
 	return 0;
 }
 
