@@ -1,0 +1,10 @@
+#ifndef CONSTANTS_H
+#define CONSTANTS_H
+
+#define SHADER_TYPE_VERTEX   0x00
+#define SHADER_TYPE_FRAGMENT 0x01
+
+#define CANVAS_WIDTH  512
+#define CANVAS_HEIGHT 320
+
+#endif // CONSTANTS_H

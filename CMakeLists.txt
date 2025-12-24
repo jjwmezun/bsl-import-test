@@ -3,9 +3,15 @@ cmake_minimum_required(VERSION 3.2)
 project(BSLImportTest)
 set(OpenGL_GL_PREFERENCE "GLVND")
 add_executable(BSLImportTest
+    src/bg_gfx.c
+    src/check_bg_gfx.c
     src/data.c
+    src/gl.c
     src/main.c
+    src/main_gfx.c
     src/matrix.c
+    src/selected_gfx.c
+    src/selector_gfx.c
     src/text.c
 )
 set_property(TARGET BSLImportTest PROPERTY C_STANDARD 23)

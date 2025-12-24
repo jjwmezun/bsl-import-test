@@ -1,9 +1,17 @@
+#include "bg_gfx.h"
 #include <brotli/decode.h>
+#include "check_bg_gfx.h"
+#include "constants.h"
+#include "gl.h"
 #include <GL/glew.h>
+#include "main_gfx.h"
 #include <math.h>
 #include "matrix.h"
+#include "palette.h"
 #include <SDL2/SDL.h>
 #include <SDL_opengl.h>
+#include "selected_gfx.h"
+#include "selector_gfx.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -16,25 +24,6 @@
 #define COMPRESSION_METHOD_ZLIB 2
 #define COMPRESSION_METHOD COMPRESSION_METHOD_BROTLI
 
-#define SHADER_TYPE_VERTEX   0x00
-#define SHADER_TYPE_FRAGMENT 0x01
-
-#define CANVAS_WIDTH  512
-#define CANVAS_HEIGHT 320
-
-typedef struct shader_t
-{
-	const char * src;
-	unsigned int type;
-}
-shader_t;
-
-typedef struct palette_t
-{
-	uint8_t len;
-	uint16_t * palettes;
-} palette_t;
-
 static SDL_Window * window;
 static int running = 1;
 static unsigned int magnification = 4;
@@ -42,13 +31,20 @@ static unsigned int screen_width;
 static unsigned int screen_height;
 
 static struct {
+	unsigned int up : 1;
+	unsigned int down : 1;
+	unsigned int left : 1;
+	unsigned int right : 1;
 	unsigned int pgup : 1;
 	unsigned int pgdown : 1;
 	unsigned int pgup_lock : 1;
 	unsigned int pgdown_lock : 1;
-} held;
+	unsigned int up_lock : 1;
+	unsigned int down_lock : 1;
+	unsigned int left_lock : 1;
+	unsigned int right_lock : 1;
+} input;
 
-static GLuint compile_shader( const shader_t * shaders, size_t count );
 static void update_screen();
 static void update_viewport();
 
@@ -95,6 +91,7 @@ void write_gfx_test( uint8_t * pixels, size_t w, size_t h )
 palette_t decode_palette( data_t * data )
 {
 	palette_t palette;
+	palette.selected = 0;
 	palette.len = *data->data++;
 	palette.palettes = calloc( palette.len, sizeof( uint16_t ) * 8 );
 	data->size--;
@@ -137,6 +134,7 @@ int main()
 
 	palette_t palette = decode_palette( &data );
 
+	printf( "\n" );
 	for ( size_t i = 0; i < palette.len * 8; ++ i )
 	{
 		printf( "0x%04X ", palette.palettes[ i ] );
@@ -228,7 +226,10 @@ int main()
 	}
 
 	// Init input
-	memset( &held, 0, sizeof( held ) );
+	memset( &input, 0, sizeof( input ) );
+
+	uint8_t selector_x = 0;
+	uint8_t selector_y = 0;
 
 	// Set up viewport.
 	screen_width = CANVAS_WIDTH * magnification;
@@ -247,224 +248,14 @@ int main()
 	glEnable( GL_BLEND );
 	glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
 
-	// Set up background shader.
-	GLuint bg_shader_program;
-	GLuint bg_vao;
-	{
-		const char * vertex_shader_source =
-			"#version 330 core\n"
-			"layout (location = 0) in vec2 i_position;\n"
-			"void main()\n"
-			"{\n"
-			"   gl_Position = vec4(i_position, 0.0, 1.0);\n"
-			"}\n";
-		const char * fragment_shader_source =
-			"#version 330 core\n"
-			"out vec4 f_color;\n"
-			"void main()\n"
-			"{\n"
-			"   f_color = vec4( 1.0, 1.0, 1.0, 1.0 );\n"
-			"}\n";
-		shader_t shaders[] =
-		{
-			{ vertex_shader_source, SHADER_TYPE_VERTEX },
-			{ fragment_shader_source, SHADER_TYPE_FRAGMENT }
-		};
-		bg_shader_program = compile_shader( shaders, 2 );
-		glUseProgram( bg_shader_program );
+	// Enable depth testing.
+	glEnable( GL_DEPTH_TEST );
 
-		float vertices[] = {
-			-1.0f, -1.0f,
-			1.0f, -1.0f,
-			1.0f, 1.0f,
-			-1.0f, 1.0f
-		};
-		unsigned int indices[] = {
-			0, 1, 2,
-			2, 3, 0
-		};
-		glGenVertexArrays( 1, &bg_vao );
-		glBindVertexArray( bg_vao );
-		GLuint vbo, ebo;
-		glGenBuffers( 1, &vbo );
-		glGenBuffers( 1, &ebo );
-		glBindBuffer( GL_ARRAY_BUFFER, vbo );
-		glBufferData( GL_ARRAY_BUFFER, sizeof( vertices ), vertices, GL_STATIC_DRAW );
-		glVertexAttribPointer( 0, 2, GL_FLOAT, GL_FALSE, 0, 0 );
-		glEnableVertexAttribArray( 0 );
-		glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
-		glBufferData( GL_ELEMENT_ARRAY_BUFFER, sizeof( indices ), indices, GL_STATIC_DRAW );
-	}
-
-	// Set up checkered background shader.
-	GLuint check_bg_shader_program;
-	GLuint check_bg_vao;
-	{
-		const char * vertex_shader_source =
-			"#version 330 core\n"
-			"layout (location = 0) in vec4 i_position;\n"
-			"layout (location = 1) in vec2 i_texcoord;\n"
-			"out vec2 v_texcoord;\n"
-			"void main()\n"
-			"{\n"
-			"   gl_Position = i_position;\n"
-			"   v_texcoord = i_texcoord;\n"
-			"}\n";
-		const char * fragment_shader_source =
-			"#version 330 core\n"
-			"out vec4 f_color;\n"
-			"in vec2 v_texcoord;\n"
-			"uniform sampler2D u_texture;\n"
-			"void main()\n"
-			"{\n"
-			"	float v = texture( u_texture, v_texcoord ).r;\n"
-			"   f_color = vec4( v, v, v, 0.25 );\n"
-			"}\n";
-		shader_t shaders[] =
-		{
-			{ vertex_shader_source, SHADER_TYPE_VERTEX },
-			{ fragment_shader_source, SHADER_TYPE_FRAGMENT }
-		};
-		check_bg_shader_program = compile_shader( shaders, 2 );
-		glUseProgram( check_bg_shader_program );
-
-		float vertices[] = {
-			-1.0f, -1.0f, 1.0f, 1.0f, 0.0f, 40.0f,
-			1.0f, -1.0f, 1.0f, 1.0f, 64.0f, 40.0f,
-			1.0f, 1.0f, 1.0f, 1.0f, 64.0f, 0.0f,
-			-1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f
-		};
-		unsigned int indices[] = {
-			0, 1, 2,
-			2, 3, 0
-		};
-		glGenVertexArrays( 1, &check_bg_vao );
-		glBindVertexArray( check_bg_vao );
-		GLuint vbo, ebo;
-		glGenBuffers( 1, &vbo );
-		glGenBuffers( 1, &ebo );
-		glBindBuffer( GL_ARRAY_BUFFER, vbo );
-		glBufferData( GL_ARRAY_BUFFER, sizeof( vertices ), vertices, GL_STATIC_DRAW );
-		glVertexAttribPointer( 0, 4, GL_FLOAT, GL_FALSE, sizeof( float ) * 6, 0 );
-		glEnableVertexAttribArray( 0 );
-		glVertexAttribPointer( 1, 2, GL_FLOAT, GL_FALSE, sizeof( float ) * 6, ( void * )( sizeof( float ) * 4 ) );
-		glEnableVertexAttribArray( 1 );
-		glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
-		glBufferData( GL_ELEMENT_ARRAY_BUFFER, sizeof( indices ), indices, GL_STATIC_DRAW );
-
-		uint8_t pattern[ 8 * 8 ] =
-		{
-			192, 192, 192, 192, 64, 64, 64, 64,
-			192, 192, 192, 192, 64, 64, 64, 64,
-			192, 192, 192, 192, 64, 64, 64, 64,
-			192, 192, 192, 192, 64, 64, 64, 64,
-			64, 64, 64, 64, 192, 192, 192, 192,
-			64, 64, 64, 64, 192, 192, 192, 192,
-			64, 64, 64, 64, 192, 192, 192, 192,
-			64, 64, 64, 64, 192, 192, 192, 192
-		};
-		GLuint check_bg_texture;
-		glGenTextures( 1, &check_bg_texture );
-		glActiveTexture( GL_TEXTURE1 );
-		glBindTexture( GL_TEXTURE_2D, check_bg_texture );
-		glTexImage2D( GL_TEXTURE_2D, 0, GL_RED, 8, 8, 0, GL_RED, GL_UNSIGNED_BYTE, pattern );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
-		glUniform1i( glGetUniformLocation( check_bg_shader_program, "u_texture" ), 1 );
-	}
-
-	// Set up graphics shader.
-	GLuint gfx_shader_program;
-	GLuint gfx_vao;
-	float gfx_palette = 0;
-	{
-		const char * vertex_shader_source =
-			"#version 330 core\n"
-			"layout (location = 0) in vec4 i_position;\n"
-			"layout (location = 1) in vec2 i_texcoord;\n"
-			"out vec2 v_texcoord;\n"
-			"uniform mat4 u_model;\n"
-			"void main()\n"
-			"{\n"
-			"   gl_Position = u_model * vec4( i_position.xy, 0.0, 1.0 );\n"
-			"   v_texcoord = i_texcoord;\n"
-			"}\n";
-		const char * fragment_shader_source =
-			"#version 330 core\n"
-			"out vec4 f_color;\n"
-			"in vec2 v_texcoord;\n"
-			"uniform sampler2D u_texture;\n"
-			"uniform sampler2D u_palette_texture;\n"
-			"uniform float u_palette_index;\n"
-			"void main()\n"
-			"{\n"
-			"	float index = texture( u_texture, v_texcoord ).r * 32.0;\n"
-			"	//if ( index <= 0.0f ) discard;\n"
-			" 	//float v = ;\n"
-			"	//float v2 = v * 32.0 - ( 1.0 / 32.0 );\n"
-			"   f_color = texture( u_palette_texture, vec2( index, u_palette_index ) );\n"
-			"	//f_color = texture( u_palette, v_texcoord );\n"
-			"}\n";
-		shader_t shaders[] =
-		{
-			{ vertex_shader_source, SHADER_TYPE_VERTEX },
-			{ fragment_shader_source, SHADER_TYPE_FRAGMENT }
-		};
-		gfx_shader_program = compile_shader( shaders, 2 );
-		glUseProgram( gfx_shader_program );
-
-		float vertices[] = {
-			-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f,
-			1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f,
-			1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f,
-			-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f
-		};
-		unsigned int indices[] = {
-			0, 1, 2,
-			2, 3, 0
-		};
-		glGenVertexArrays( 1, &gfx_vao );
-		glBindVertexArray( gfx_vao );
-		GLuint vbo, ebo;
-		glGenBuffers( 1, &vbo );
-		glGenBuffers( 1, &ebo );
-		glBindBuffer( GL_ARRAY_BUFFER, vbo );
-		glBufferData( GL_ARRAY_BUFFER, sizeof( vertices ), vertices, GL_STATIC_DRAW );
-		glVertexAttribPointer( 0, 4, GL_FLOAT, GL_FALSE, sizeof( float ) * 6, 0 );
-		glEnableVertexAttribArray( 0 );
-		glVertexAttribPointer( 1, 2, GL_FLOAT, GL_FALSE, sizeof( float ) * 6, ( void * )( sizeof( float ) * 4 ) );
-		glEnableVertexAttribArray( 1 );
-		glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
-		glBufferData( GL_ELEMENT_ARRAY_BUFFER, sizeof( indices ), indices, GL_STATIC_DRAW );
-
-		// Create graphics texture.
-		GLuint gfx_texture;
-		glGenTextures( 1, &gfx_texture );
-		glActiveTexture( GL_TEXTURE0 );
-		glBindTexture( GL_TEXTURE_2D, gfx_texture );
-		glTexImage2D( GL_TEXTURE_2D, 0, GL_RED, 512, 512, 0, GL_RED, GL_UNSIGNED_BYTE, pixels );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
-		glUniform1i( glGetUniformLocation( gfx_shader_program, "u_texture" ), 0 );
-
-		// Create palette texture.
-		GLuint pal_texture;
-		glGenTextures( 1, &pal_texture );
-		glActiveTexture( GL_TEXTURE2 );
-		glBindTexture( GL_TEXTURE_2D, pal_texture );
-		glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB5_A1, 8, palette.len, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, palette.palettes );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
-		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
-		glUniform1i( glGetUniformLocation( gfx_shader_program, "u_palette_texture" ), 2 );
-
-		glUniform1f( glGetUniformLocation( gfx_shader_program, "u_palette_index" ), gfx_palette / palette.len );
-
-		float model[ 16 ];
-		mat4_identity( model );
-		mat4_scale( model, ( 1.0f / ( float )( CANVAS_WIDTH ) ) * 512.0f, ( 1.0f / ( float )( CANVAS_HEIGHT ) ) * 512.0f, 0.0f );
-		mat4_translate( model, -1.0f + ( 512.0f / ( float )( CANVAS_WIDTH ) ), ( -1.0f + ( 512.0f / ( float )( CANVAS_HEIGHT ) ) ) * -1.0, 0.0f );
-		glUniformMatrix4fv( glGetUniformLocation( gfx_shader_program, "u_model" ), 1, GL_FALSE, model );
-	}
+	//init_bg_gfx();
+	init_checkered_bg_gfx();
+	init_main_gfx( pixels, palette );
+	init_selected_gfx( palette, selector_x, selector_y );
+	init_selector_gfx( ( float )( selector_x ), ( float )( selector_y ) );
 
 	SDL_Event event;
 	while ( running )
@@ -493,14 +284,34 @@ int main()
 							running = 0;
 						}
 						break;
+						case ( SDLK_UP ):
+						{
+							input.up = 1;
+						}
+						break;
+						case ( SDLK_DOWN ):
+						{
+							input.down = 1;
+						}
+						break;
+						case ( SDLK_LEFT ):
+						{
+							input.left = 1;
+						}
+						break;
+						case ( SDLK_RIGHT ):
+						{
+							input.right = 1;
+						}
+						break;
 						case ( SDLK_PAGEUP ):
 						{
-							held.pgup = 1;
+							input.pgup = 1;
 						}
 						break;
 						case ( SDLK_PAGEDOWN ):
 						{
-							held.pgdown = 1;
+							input.pgdown = 1;
 						}
 						break;
 					}
@@ -508,16 +319,40 @@ int main()
 				case SDL_KEYUP:
 					switch ( event.key.keysym.sym )
 					{
+						case ( SDLK_UP ):
+						{
+							input.up = 0;
+							input.up_lock = 0;
+						}
+						break;
+						case ( SDLK_DOWN ):
+						{
+							input.down = 0;
+							input.down_lock = 0;
+						}
+						break;
+						case ( SDLK_LEFT ):
+						{
+							input.left = 0;
+							input.left_lock = 0;
+						}
+						break;
+						case ( SDLK_RIGHT ):
+						{
+							input.right = 0;
+							input.right_lock = 0;
+						}
+						break;
 						case ( SDLK_PAGEUP ):
 						{
-							held.pgup = 0;
-							held.pgup_lock = 0;
+							input.pgup = 0;
+							input.pgup_lock = 0;
 						}
 						break;
 						case ( SDLK_PAGEDOWN ):
 						{
-							held.pgdown = 0;
-							held.pgdown_lock = 0;
+							input.pgdown = 0;
+							input.pgdown_lock = 0;
 						}
 						break;
 					}
@@ -526,58 +361,103 @@ int main()
 		}
 
 		// Change palette on pgup or pgdown.
-		if ( held.pgup && !held.pgup_lock )
+		if ( input.pgup && !input.pgup_lock )
 		{
-			gfx_palette++;
-			if ( gfx_palette >= palette.len )
+			palette.selected++;
+			if ( palette.selected >= palette.len )
 			{
-				gfx_palette = 0;
+				palette.selected = 0;
 			}
-			glUseProgram( gfx_shader_program );
-			glUniform1f( glGetUniformLocation( gfx_shader_program, "u_palette_index" ), gfx_palette / palette.len );
+			update_main_gfx_palette( palette );
+			update_selected_gfx_palette( palette );
 		}
-		else if ( held.pgdown && !held.pgdown_lock )
+		else if ( input.pgdown && !input.pgdown_lock )
 		{
-			if ( gfx_palette == 0 )
+			if ( palette.selected == 0 )
 			{
-				gfx_palette = palette.len - 1;
+				palette.selected = palette.len - 1;
 			}
 			else
 			{
-				gfx_palette--;
+				palette.selected--;
 			}
-			glUseProgram( gfx_shader_program );
-			glUniform1f( glGetUniformLocation( gfx_shader_program, "u_palette_index" ), gfx_palette / palette.len );
+			update_main_gfx_palette( palette );
+			update_selected_gfx_palette( palette );
+		}
+
+		if ( input.right && !input.right_lock )
+		{
+			if ( selector_x < 63 )
+			{
+				selector_x++;
+				update_selected_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+				update_selector_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+			}
+		}
+		else if ( input.left && !input.left_lock )
+		{
+			if ( selector_x > 0 )
+			{
+				selector_x--;
+				update_selected_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+				update_selector_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+			}
+		}
+
+		if ( input.up && !input.up_lock )
+		{
+			if ( selector_y > 0 )
+			{
+				selector_y--;
+				update_selected_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+				update_selector_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+			}
+		}
+		else if ( input.down && !input.down_lock )
+		{
+			if ( selector_y < 63 )
+			{
+				selector_y++;
+				update_selected_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+				update_selector_gfx( ( float )( selector_x ), ( float )( selector_y ) );
+			}
 		}
 
 		// Update keylock states.
-		if ( held.pgup )
+		if ( input.pgup )
 		{
-			held.pgup_lock = 1;
+			input.pgup_lock = 1;
 		}
-		if ( held.pgdown )
+		if ( input.pgdown )
 		{
-			held.pgdown_lock = 1;
+			input.pgdown_lock = 1;
+		}
+		if ( input.up )
+		{
+			input.up_lock = 1;
+		}
+		if ( input.down )
+		{
+			input.down_lock = 1;
+		}
+		if ( input.left )
+		{
+			input.left_lock = 1;
+		}
+		if ( input.right )
+		{
+			input.right_lock = 1;
 		}
 
 		// Clear the screen.
 		glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
 		glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 
-		// Draw background.
-		glUseProgram( bg_shader_program );
-		glBindVertexArray( bg_vao );
-		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0 );
-
-		// Draw checkered background.
-		glUseProgram( check_bg_shader_program );
-		glBindVertexArray( check_bg_vao );
-		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0 );
-
-		// Draw graphics.
-		glUseProgram( gfx_shader_program );
-		glBindVertexArray( gfx_vao );
-		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0 );
+		draw_selector_gfx();
+		draw_selected_gfx();
+		draw_main_gfx();
+		draw_checkered_bg_gfx();
+		//draw_bg_gfx();
 
 		SDL_GL_SwapWindow( window );
 	}
@@ -588,58 +468,6 @@ int main()
 	SDL_DestroyWindow( window );
 	SDL_Quit();
 	return 0;
-}
-
-static GLuint compile_shader( const shader_t * shaders, size_t count )
-{
-	GLuint program = glCreateProgram();
-	GLuint * shader_ids = malloc( sizeof( GLuint ) * count );
-	char info_log[ 512 ];
-
-	for ( size_t i = 0; i < count; i++ )
-	{
-		GLenum shader_type = shaders[i].type == SHADER_TYPE_FRAGMENT
-			? GL_FRAGMENT_SHADER
-			: GL_VERTEX_SHADER;
-		GLuint shader = glCreateShader( shader_type );
-
-		glShaderSource( shader, 1, &shaders[i].src, NULL );
-		glCompileShader( shader );
-
-		GLint success;
-		glGetShaderiv( shader, GL_COMPILE_STATUS, &success );
-		if ( ! success )
-		{
-			glGetShaderInfoLog( shader, 512, NULL, info_log );
-			fprintf( stderr, "Shader compilation failed: %s\n", info_log );
-			glDeleteShader( shader );
-			continue;
-		}
-
-		glAttachShader( program, shader );
-		shader_ids[i] = shader;
-	}
-
-	glLinkProgram( program );
-
-	GLint success;
-	glGetProgramiv( program, GL_LINK_STATUS, &success );
-	if ( ! success )
-	{
-		glGetProgramInfoLog( program, 512, NULL, info_log );
-		fprintf( stderr, "Program linking failed: %s\n", info_log );
-		glDeleteProgram( program );
-		program = 0;
-	}
-
-	for ( size_t i = 0; i < count; i++ )
-	{
-		glDetachShader( program, shader_ids[i] );
-		glDeleteShader( shader_ids[i] );
-	}
-	free( shader_ids );
-
-	return program;
 }
 
 static void update_screen()

@@ -146,9 +146,9 @@ void mat3_translate( float * matrix, float x, float y )
 {
 	float translate_matrix[ 9 ] =
 	{
-		1.0f, 0.0f, x,
-		0.0f, 1.0f, y,
-		0.0f, 0.0f, 1.0f
+		1.0f, 0.0f, 0.0f,
+		0.0f, 1.0f, 0.0f,
+		x, y, 1.0f
 	};
 	mat3_multiply( matrix, translate_matrix );
 }
